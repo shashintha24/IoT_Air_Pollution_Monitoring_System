@@ -21,6 +21,8 @@ SoftwareSerial mySerial(2, 3);
 TMRpcm tmrpcm;
 
 bool alertSent = false;  // Flag to prevent repeated alerts
+unsigned long alertStartTime = 0;  // Time when the alert started
+bool alertInProgress = false;  // Flag to indicate if an alert is in progress
 
 void setup() {
     Serial.begin(serialCommunicationSpeed);
@@ -29,18 +31,34 @@ void setup() {
     InitWifiModule();
     
     tmrpcm.speakerPin = 9;
-    if (!SD.begin(SD_ChipSelectPin)) return; // Check SD card
+    if (!SD.begin(SD_ChipSelectPin)) {
+        if (DEBUG) Serial.println("SD card initialization failed!");
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("SD Init Failed!");
+        while (true); // Halt execution
+    }
     tmrpcm.setVolume(1);
     
     lcd.begin(16, 2);
     lcd.setCursor(0, 0);
     lcd.print("Setting Up...");
     lcd.setCursor(0, 1);
-    lcd.print("Sensor Warming");
+    static unsigned long lastReadingTime = 0;
+    unsigned long currentTime = millis();
+    
+    if (currentTime - lastReadingTime >= 5000) { // Read sensor every 5 seconds
+        float air_quality = gasSensor.getPPM();
+        handleWebServer(air_quality);
+        displayLCD(air_quality);
+        handleAlerts(air_quality);
+        lastReadingTime = currentTime;
+    }
     delay(1000);
-    lcd.clear();
-}
-
+    if (alertInProgress && millis() - alertStartTime >= 11500) {
+        tmrpcm.setVolume(1);
+        alertInProgress = false;
+    }
 void loop() {
     float air_quality = gasSensor.getPPM();
     handleWebServer(air_quality);
@@ -55,7 +73,7 @@ void handleWebServer(float air_quality) {
         
         String webpage = "<h1>IOT Air Pollution Monitoring System</h1><p><h2>";
         webpage += "Air Quality is ";
-        webpage += air_quality;
+        sendData("AT+CIPSEND=" + String(connectionId) + "," + String(webpage.length()) + "\r\n", 3000, DEBUG);
         webpage += " PPM</h2><p>";
         
         if (air_quality <= 20) {
@@ -96,7 +114,8 @@ void handleAlerts(float air_quality) {
         tmrpcm.setVolume(4);
         tmrpcm.play("1.wav");
         delay(11500);
-        tmrpcm.setVolume(1);
+        alertStartTime = millis();
+        alertInProgress = true;
         alertSent = true;  // Prevent repeated alerts
     } else if (air_quality <= 50) {
         alertSent = false;  // Reset alert when air quality improves
